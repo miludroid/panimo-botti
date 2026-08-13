@@ -197,10 +197,12 @@ def load_seen() -> set:
             return set(json.load(f))
     return set()
 
-def save_seen(seen: set) -> None:
-    """Tallentaa postattujen oluiden listan."""
+def save_seen(new_beers: set) -> None:
+    """Lisää uudet oluet muistilistaan — ei koskaan poista vanhoja."""
+    existing = load_seen()
+    merged = existing | new_beers  # yhdistelmä, ei kumpikaan häviä
     with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
+        json.dump(list(merged), f)
         
 def send_to_discord(uutuudet: list[dict]) -> None:
     """Lähettää uutuusolut Discord-kanavalle."""
@@ -266,8 +268,8 @@ def main():
 
     # Tallennetaan postatut muistiin
     if uudet:
-        seen.update(f"{u['panimo']}:{u['olut']}" for u in uudet)
-        save_seen(seen)
+       new_beers = {f"{u['panimo']}:{u['olut']}" for u in uudet}
+        save_seen(new_beers)
 
     send_to_discord(uutuudet)
     print("Valmis!")
