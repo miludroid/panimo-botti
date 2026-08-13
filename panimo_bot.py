@@ -39,8 +39,11 @@ def fetch_page_html() -> str:
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = context.new_page()
-        page.goto(BREWERY_URL, wait_until="networkidle", timeout=45000)
-        page.wait_for_timeout(3000)
+        page.goto(BREWERY_URL, wait_until="domcontentloaded", timeout=45000)
+        # Odotetaan että SOMEUUTISET-osio latautuu (max 20s)
+        page.wait_for_selector("text=SOMEUUTISET", timeout=20000)
+        # Pieni lisäodotus että Facebook-postaukset ehtivät renderöityä
+        page.wait_for_timeout(4000)
         html = page.content()
         browser.close()
     return html
