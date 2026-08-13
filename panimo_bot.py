@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-Suomalaisten pienpanimoiden uutuusolutunnistin
-Hakee suomenpienpanimot.fi:n some-postaukset Playwrightilla ja
-tunnistaa uutuudet Claude API:n avulla. Lähettää löydöt Discordiin.
+Suomalaisten pienpanimoiden uutuusolutunnistin - debug-versio
 """
 
 import os
@@ -36,20 +34,37 @@ def fetch_brewery_posts() -> str:
             ),
             viewport={"width": 1280, "height": 800},
             locale="fi-FI",
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
-            }
         )
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = context.new_page()
         page.goto(BREWERY_URL, wait_until="networkidle", timeout=45000)
-        # Odotetaan että some-postaukset latautuvat
-        page.wait_for_selector("text=SOMEUUTISET", timeout=15000)
+
+        # Odotetaan hetki että JS-sisältö latautuu
+        page.wait_for_timeout(3000)
+
         html = page.content()
         browser.close()
+
+    # DEBUG: tulostetaan tietoa HTML:stä
+    print(f"HTML pituus: {len(html)} merkkiä")
+    print(f"SOMEUUTISET löytyy: {'SOMEUUTISET' in html}")
+    print(f"'Julkaistu' löytyy: {'Julkaistu' in html}")
+    print(f"'panimo' löytyy: {'suomenpienpanimot.fi/' in html}")
+
+    # Tulostetaan SOMEUUTISET-osion alku jos löytyy
+    soma_idx = html.find("SOMEUUTISET")
+    if soma_idx != -1:
+        snippet = html[soma_idx:soma_idx+2000]
+        # Poistetaan img-tagit luettavuuden vuoksi
+        snippet = re.sub(r'<img[^>]+>', '[IMG]', snippet)
+        print(f"\n--- SOMEUUTISET-osion alku ---\n{snippet[:1500]}\n---")
+    else:
+        # Tulostetaan keskiosa HTML:stä jos SOMEUUTISET ei löydy
+        mid = len(html) // 2
+        print(f"\n--- HTML keskiosa (ei SOMEUUTISET-osiota) ---\n{html[mid:mid+1000]}\n---")
+
     return html
 
 
@@ -59,31 +74,56 @@ def extract_posts_from_html(html: str) -> list[dict]:
 
     soma_start = html.find("SOMEUUTISET")
     if soma_start == -1:
-        print("SOMEUUTISET-osiota ei löydy sivulta")
-        return posts
+        print("SOMEUUTISET-osiota ei löydy — yritetään koko sivulta")
+        soma_start = 0
 
     soma_html = html[soma_start:]
 
-    # Rakenne: [teksti](panimo-url) + Julkaistu X sitten @ [Panimo](url)
-    pattern = re.compile(
-        r'\[([^\]]{20,600}?)\]\(https://suomenpienpanimot\.fi/[^)]+\)\s*'
-        r'Julkaistu ([^\n@]{1,40})@ \[([^\]]+)\]',
-        re.DOTALL
-    )
+    # Kokeillaan useita eri rakenteita
+    patterns = [
+        # Markdown-tyylinen rakenne
+        re.compile(
+            r'\[([^\]]{20,600}?)\]\(https://suomenpienpanimot\.fi/([^)]+)\)\s*'
+            r'Julkaistu ([^\n@]{1,50})@ \[([^\]]+)\]',
+            re.DOTALL
+        ),
+        # HTML-rakenne: etsitään teksti + panimo suoraan
+        re.compile(
+            r'Julkaistu\s+(.{3,40}?)\s*@\s*([A-ZÄÖÅ][^\n<]{2,60})',
+            re.DOTALL
+        ),
+    ]
 
-    for match in pattern.finditer(soma_html):
-        teksti = match.group(1).strip()
-        aika = match.group(2).strip()
-        panimo = match.group(3).strip()
+    for i, pattern in enumerate(patterns):
+        matches = list(pattern.finditer(soma_html))
+        print(f"Pattern {i+1}: {len(matches)} osumaa")
+        if matches and i == 0:
+            for match in matches:
+                teksti = match.group(1).strip()
+                slug = match.group(2).strip()
+                aika = match.group(3).strip()
+                panimo = match.group(4).strip()
+                if len(teksti) >= 20:
+                    posts.append({
+                        "panimo": panimo,
+                        "teksti": teksti[:500],
+                        "aika": aika,
+                        "slug": slug
+                    })
+        elif matches and i == 1 and not posts:
+            for match in matches[:5]:
+                print(f"  Pattern 2 osuma: '{match.group(0)[:100]}'")
 
-        if len(teksti) < 20:
-            continue
-
-        posts.append({
-            "panimo": panimo,
-            "teksti": teksti[:500],
-            "aika": aika
-        })
+    # Jos kumpikin pattern epäonnistui, yritetään BeautifulSoup-tyylisesti
+    if not posts:
+        print("\nYritetään etsiä 'Julkaistu'-tekstiä HTML:stä suoraan...")
+        julk_positions = [m.start() for m in re.finditer('Julkaistu', soma_html)]
+        print(f"'Julkaistu' esiintyy {len(julk_positions)} kertaa")
+        for pos in julk_positions[:3]:
+            snippet = soma_html[max(0,pos-200):pos+200]
+            snippet_clean = re.sub(r'<[^>]+>', ' ', snippet)
+            snippet_clean = re.sub(r'\s+', ' ', snippet_clean)
+            print(f"  Konteksti: ...{snippet_clean}...")
 
     return posts
 
@@ -109,18 +149,15 @@ HYVÄKSY (uutuusolut):
 - Viikon olut tai tuoreolut jota kuvataan yksityiskohtaisesti
 
 HYLKÄÄ (ei uutuusolut):
-- Tapahtumat, konsertit, festivaalit
-- Aukioloajat
-- Lounasmainokset
+- Tapahtumat, konsertit, festivaalit, aukioloajat, lounasmainokset
 - Yleinen tunnelmajuttu tai brändimainonta
 - Palkinnot jo olemassa olevista oluista
 - Teaserviestit ilman tuotenimeä ("tulossa pian...")
-- Festarimainonta jossa listataan jo tunnettuja tuotteita
 
-Vastaa AINOASTAAN JSON-muodossa, ei muuta tekstiä:
-{{"uutuudet": [{{"panimo": "Panimon nimi", "olut": "Oluen nimi ja tyyli", "kuvaus": "Lyhyt kuvaus max 100 merkkiä", "slug": "panimon-slug-urlista"}}]}}
+Vastaa AINOASTAAN JSON-muodossa:
+{{"uutuudet": [{{"panimo": "Panimon nimi", "olut": "Oluen nimi ja tyyli", "kuvaus": "max 100 merkkiä", "slug": "panimon-slug"}}]}}
 
-Jos uutuuksia ei ole, palauta: {{"uutuudet": []}}
+Jos uutuuksia ei ole: {{"uutuudet": []}}
 
 POSTAUKSET:
 {posts_text}"""
@@ -191,7 +228,6 @@ def main():
     print("Analysoidaan Claude API:lla...")
     uutuudet = analyze_with_claude(posts)
     print(f"Tunnistettiin {len(uutuudet)} uutuusolutta")
-
     for u in uutuudet:
         print(f"  ✓ {u['panimo']}: {u['olut']}")
 
