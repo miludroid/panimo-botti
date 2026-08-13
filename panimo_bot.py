@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Suomalaisten pienpanimoiden uutuusolutunnistin - debug-versio
+Suomalaisten pienpanimoiden uutuusolutunnistin
 """
 
 import os
@@ -19,8 +19,8 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def fetch_brewery_posts() -> str:
-    """Hakee suomenpienpanimot.fi etusivun sisällön Playwrightilla."""
+def fetch_page_html() -> str:
+    """Hakee suomenpienpanimot.fi etusivun Playwrightilla."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -40,69 +40,85 @@ def fetch_brewery_posts() -> str:
         )
         page = context.new_page()
         page.goto(BREWERY_URL, wait_until="networkidle", timeout=45000)
-
-        # Odotetaan hetki että JS-sisältö latautuu
         page.wait_for_timeout(3000)
-
         html = page.content()
         browser.close()
-
-    # DEBUG: tulostetaan tietoa HTML:stä
-    print(f"HTML pituus: {len(html)} merkkiä")
-    print(f"SOMEUUTISET löytyy: {'SOMEUUTISET' in html}")
-    print(f"'Julkaistu' löytyy: {'Julkaistu' in html}")
-    print(f"'panimo' löytyy: {'suomenpienpanimot.fi/' in html}")
-
-    # Tulostetaan SOMEUUTISET-osion alku jos löytyy
-    soma_idx = html.find("SOMEUUTISET")
-    if soma_idx != -1:
-        snippet = html[soma_idx:soma_idx+2000]
-        # Poistetaan img-tagit luettavuuden vuoksi
-        snippet = re.sub(r'<img[^>]+>', '[IMG]', snippet)
-        print(f"\n--- SOMEUUTISET-osion alku ---\n{snippet[:1500]}\n---")
-    else:
-        # Tulostetaan keskiosa HTML:stä jos SOMEUUTISET ei löydy
-        mid = len(html) // 2
-        print(f"\n--- HTML keskiosa (ei SOMEUUTISET-osiota) ---\n{html[mid:mid+1000]}\n---")
-
     return html
 
 
 def extract_posts_from_html(html: str) -> list[dict]:
-    """Poimii some-postaukset HTML:stä."""
+    """
+    Poimii some-postaukset HTML:stä.
+    Rakenne:
+      <a href="panimo-slug">Postauksen teksti</a>
+      Julkaistu <span>X tuntia</span> sitten @ <a ...>Panimon Nimi</a>
+    """
     posts = []
 
     soma_start = html.find("SOMEUUTISET")
     if soma_start == -1:
-        print("SOMEUUTISET-osiota ei löydy — yritetään koko sivulta")
-        soma_start = 0
+        print("SOMEUUTISET-osiota ei löydy")
+        return posts
 
     soma_html = html[soma_start:]
 
-    # Kokeillaan useita eri rakenteita
-    patterns = [
-        # Markdown-tyylinen rakenne
-        re.compile(
-            r'\[([^\]]{20,600}?)\]\(https://suomenpienpanimot\.fi/([^)]+)\)\s*'
-            r'Julkaistu ([^\n@]{1,50})@ \[([^\]]+)\]',
-            re.DOTALL
-        ),
-        # HTML-rakenne: etsitään teksti + panimo suoraan
-        re.compile(
-            r'Julkaistu\s+(.{3,40}?)\s*@\s*([A-ZÄÖÅ][^\n<]{2,60})',
-            re.DOTALL
-        ),
-    ]
+    # Rakenne: <a href="slug">teksti</a> ... Julkaistu ... sitten @ panimo
+    pattern = re.compile(
+        r'<a href="([a-z0-9-]+)"[^>]*>\s*'   # <a href="panimo-slug">
+        r'([\s\S]{20,600}?)'                   # postauksen teksti
+        r'</a>\s*'                             # </a>
+        r'</div>\s*'
+        r'<div[^>]*>\s*Julkaistu\s+'          # Julkaistu
+        r'<span[^>]*>([^<]+)</span>'           # <span>X tuntia</span>
+        r'\s*sitten\s*@\s*'
+        r'<a[^>]*>([^<]+)</a>',               # <a>Panimon Nimi</a>
+        re.DOTALL
+    )
 
-    for i, pattern in enumerate(patterns):
-        matches = list(pattern.finditer(soma_html))
-        print(f"Pattern {i+1}: {len(matches)} osumaa")
-        if matches and i == 0:
-            for match in matches:
-                teksti = match.group(1).strip()
-                slug = match.group(2).strip()
-                aika = match.group(3).strip()
-                panimo = match.group(4).strip()
+    for match in pattern.finditer(soma_html):
+        slug = match.group(1).strip()
+        teksti_raw = match.group(2).strip()
+        aika = match.group(3).strip()
+        panimo = match.group(4).strip()
+
+        # Puhdistetaan HTML-tagit tekstistä
+        teksti = re.sub(r'<[^>]+>', '', teksti_raw)
+        teksti = re.sub(r'\s+', ' ', teksti).strip()
+
+        # Suodatetaan pois liian lyhyet
+        if len(teksti) < 20:
+            continue
+
+        posts.append({
+            "panimo": panimo,
+            "teksti": teksti[:500],
+            "aika": aika,
+            "slug": slug
+        })
+
+    print(f"Pattern löysi {len(posts)} postausta")
+
+    # Jos pattern ei toiminut, kokeillaan löyhempää versiota
+    if not posts:
+        print("Yritetään löyhempää patternilla...")
+        pattern2 = re.compile(
+            r'Julkaistu\s+<span[^>]*>([^<]+)</span>\s*sitten\s*@\s*<a[^>]*>([^<]+)</a>',
+            re.DOTALL
+        )
+        # Etsi Julkaistu-kohdat ja poimi teksti edeltä
+        for match in pattern2.finditer(soma_html):
+            aika = match.group(1).strip()
+            panimo = match.group(2).strip()
+            # Etsi edeltävä teksti: viimeisin <a href="slug">...</a> ennen tätä
+            before = soma_html[:match.start()]
+            prev_a = re.search(
+                r'<a href="([a-z0-9-]+)"[^>]*>([\s\S]{20,500}?)</a>\s*</div>\s*<div[^>]*>\s*$',
+                before
+            )
+            if prev_a:
+                slug = prev_a.group(1)
+                teksti = re.sub(r'<[^>]+>', '', prev_a.group(2))
+                teksti = re.sub(r'\s+', ' ', teksti).strip()
                 if len(teksti) >= 20:
                     posts.append({
                         "panimo": panimo,
@@ -110,20 +126,8 @@ def extract_posts_from_html(html: str) -> list[dict]:
                         "aika": aika,
                         "slug": slug
                     })
-        elif matches and i == 1 and not posts:
-            for match in matches[:5]:
-                print(f"  Pattern 2 osuma: '{match.group(0)[:100]}'")
 
-    # Jos kumpikin pattern epäonnistui, yritetään BeautifulSoup-tyylisesti
-    if not posts:
-        print("\nYritetään etsiä 'Julkaistu'-tekstiä HTML:stä suoraan...")
-        julk_positions = [m.start() for m in re.finditer('Julkaistu', soma_html)]
-        print(f"'Julkaistu' esiintyy {len(julk_positions)} kertaa")
-        for pos in julk_positions[:3]:
-            snippet = soma_html[max(0,pos-200):pos+200]
-            snippet_clean = re.sub(r'<[^>]+>', ' ', snippet)
-            snippet_clean = re.sub(r'\s+', ' ', snippet_clean)
-            print(f"  Konteksti: ...{snippet_clean}...")
+        print(f"Löyhempi pattern löysi {len(posts)} postausta")
 
     return posts
 
@@ -139,6 +143,7 @@ def analyze_with_claude(posts: list[dict]) -> list[dict]:
         posts_text += f"Panimo: {post['panimo']}\n"
         posts_text += f"Aika: {post['aika']}\n"
         posts_text += f"Teksti: {post['teksti']}\n"
+        posts_text += f"Slug: {post['slug']}\n"
 
     prompt = f"""Analysoi nämä suomalaisten pienpanimoiden some-postaukset ja tunnista AINOASTAAN ne, joissa julkaistaan uusi olut tai uusi erä.
 
@@ -215,11 +220,17 @@ def main():
     print(f"Panimo-botti käynnistyy: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
     print("Haetaan postaukset Playwrightilla...")
-    html = fetch_brewery_posts()
+    html = fetch_page_html()
+    print(f"HTML haettu, {len(html)} merkkiä")
 
     print("Poimitaan postaukset...")
     posts = extract_posts_from_html(html)
     print(f"Löytyi {len(posts)} postausta")
+
+    if posts:
+        print("Ensimmäiset 3 postausta:")
+        for p in posts[:3]:
+            print(f"  [{p['panimo']}] {p['teksti'][:80]}...")
 
     if not posts:
         print("Ei postauksia löydetty — lopetetaan.")
