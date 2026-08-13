@@ -267,11 +267,9 @@ def main():
     send_to_discord(uudet)
 
     # Tallennetaan postatut muistiin
-    if uudet:
-       new_beers = {f"{u['panimo']}:{u['olut']}" for u in uudet}
+   if uudet:
+        new_beers = {f"{u['panimo']}:{u['olut']}" for u in uudet}
         save_seen(new_beers)
-
-    send_to_discord(uutuudet)
     print("Valmis!")
 
 
