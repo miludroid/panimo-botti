@@ -161,6 +161,7 @@ HYLKÄÄ (ei uutuusolut):
 - Yleinen tunnelmajuttu tai brändimainonta
 - Palkinnot jo olemassa olevista oluista
 - Teaserviestit ilman tuotenimeä ("tulossa pian...")
+- "Viikon olut" -tyyppiset nostot vakiotuotteista
 
 Vastaa AINOASTAAN JSON-muodossa:
 {{"uutuudet": [{{"panimo": "Panimon nimi", "olut": "Oluen nimi ja tyyli", "kuvaus": "max 100 merkkiä", "slug": "panimon-slug"}}]}}
@@ -187,7 +188,20 @@ POSTAUKSET:
         print(f"JSON-parsintavirhe: {e}\nClaude vastasi: {result_text}")
         return []
 
+SEEN_FILE = "seen_beers.json"
 
+def load_seen() -> set:
+    """Lataa aiemmin postattujen oluiden lista."""
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE) as f:
+            return set(json.load(f))
+    return set()
+
+def save_seen(seen: set) -> None:
+    """Tallentaa postattujen oluiden listan."""
+    with open(SEEN_FILE, "w") as f:
+        json.dump(list(seen), f)
+        
 def send_to_discord(uutuudet: list[dict]) -> None:
     """Lähettää uutuusolut Discord-kanavalle."""
     if not uutuudet:
@@ -202,8 +216,6 @@ def send_to_discord(uutuudet: list[dict]) -> None:
         lines.append(f"🆕 {u['olut']}")
         if u.get("kuvaus"):
             lines.append(f"_{u['kuvaus']}_")
-        if u.get("slug"):
-            lines.append(f"https://suomenpienpanimot.fi/{u['slug']}")
         lines.append("")
 
     message = "\n".join(lines)
@@ -242,8 +254,20 @@ def main():
     print("Analysoidaan Claude API:lla...")
     uutuudet = analyze_with_claude(posts)
     print(f"Tunnistettiin {len(uutuudet)} uutuusolutta")
-    for u in uutuudet:
+
+    # Suodatetaan pois jo aiemmin postatut
+    seen = load_seen()
+    uudet = [u for u in uutuudet if f"{u['panimo']}:{u['olut']}" not in seen]
+    print(f"Uusia (ei aiemmin postattuja): {len(uudet)}")
+    for u in uudet:
         print(f"  ✓ {u['panimo']}: {u['olut']}")
+
+    send_to_discord(uudet)
+
+    # Tallennetaan postatut muistiin
+    if uudet:
+        seen.update(f"{u['panimo']}:{u['olut']}" for u in uudet)
+        save_seen(seen)
 
     send_to_discord(uutuudet)
     print("Valmis!")
