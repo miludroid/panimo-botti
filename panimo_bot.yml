@@ -4,7 +4,6 @@ on:
   schedule:
     - cron: '0 17 * * *'
   workflow_dispatch:
-    # Ei push-triggeriä — botti ajaa vain aikataululla tai manuaalisesti
 
 jobs:
   tarkista-uutuudet:
@@ -25,7 +24,7 @@ jobs:
       - name: Asenna Playwright + Chromium
         run: playwright install chromium --with-deps
 
-      - name: Lataa muistilista edellisestä ajosta
+      - name: Lataa muistilista edellisesta ajosta
         uses: actions/cache@v4
         with:
           path: seen_beers.json
