@@ -2,10 +2,8 @@ name: Panimo-botti
 
 on:
   schedule:
-    # Joka päivä klo 20:00 Suomen aikaa (kesällä UTC+3 = 17:00 UTC)
     - cron: '0 17 * * *'
   workflow_dispatch:
-    # Manuaalinen ajo GitHubista testaamista varten
 
 jobs:
   tarkista-uutuudet:
@@ -26,8 +24,23 @@ jobs:
       - name: Asenna Playwright + Chromium
         run: playwright install chromium --with-deps
 
+      - name: Lataa muistilista edellisesta ajosta
+        uses: actions/cache@v4
+        with:
+          path: seen_beers.json
+          key: seen-beers-${{ github.run_id }}
+          restore-keys: |
+            seen-beers-
+
       - name: Aja panimo-botti
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python panimo_bot.py
+
+      - name: Tallenna muistilista seuraavaa ajoa varten
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: seen_beers.json
+          key: seen-beers-${{ github.run_id }}
