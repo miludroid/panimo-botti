@@ -25,7 +25,7 @@ jobs:
       - name: Asenna Playwright + Chromium
         run: playwright install chromium --with-deps
 
-      - - name: Lataa muistilista edellisestä ajosta
+      - name: Lataa muistilista edellisestä ajosta
         uses: actions/cache@v4
         with:
           path: seen_beers.json
