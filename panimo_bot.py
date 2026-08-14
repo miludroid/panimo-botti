@@ -40,9 +40,7 @@ def fetch_page_html() -> str:
         )
         page = context.new_page()
         page.goto(BREWERY_URL, wait_until="domcontentloaded", timeout=45000)
-        # Odotetaan että SOMEUUTISET-osio latautuu (max 20s)
         page.wait_for_selector("text=SOMEUUTISET", timeout=20000)
-        # Pieni lisäodotus että Facebook-postaukset ehtivät renderöityä
         page.wait_for_timeout(4000)
         html = page.content()
         browser.close()
@@ -50,12 +48,7 @@ def fetch_page_html() -> str:
 
 
 def extract_posts_from_html(html: str) -> list[dict]:
-    """
-    Poimii some-postaukset HTML:stä.
-    Rakenne:
-      <a href="panimo-slug">Postauksen teksti</a>
-      Julkaistu <span>X tuntia</span> sitten @ <a ...>Panimon Nimi</a>
-    """
+    """Poimii some-postaukset HTML:stä."""
     posts = []
 
     soma_start = html.find("SOMEUUTISET")
@@ -65,16 +58,15 @@ def extract_posts_from_html(html: str) -> list[dict]:
 
     soma_html = html[soma_start:]
 
-    # Rakenne: <a href="slug">teksti</a> ... Julkaistu ... sitten @ panimo
     pattern = re.compile(
-        r'<a href="([a-z0-9-]+)"[^>]*>\s*'   # <a href="panimo-slug">
-        r'([\s\S]{20,600}?)'                   # postauksen teksti
-        r'</a>\s*'                             # </a>
+        r'<a href="([a-z0-9-]+)"[^>]*>\s*'
+        r'([\s\S]{20,600}?)'
+        r'</a>\s*'
         r'</div>\s*'
-        r'<div[^>]*>\s*Julkaistu\s+'          # Julkaistu
-        r'<span[^>]*>([^<]+)</span>'           # <span>X tuntia</span>
+        r'<div[^>]*>\s*Julkaistu\s+'
+        r'<span[^>]*>([^<]+)</span>'
         r'\s*sitten\s*@\s*'
-        r'<a[^>]*>([^<]+)</a>',               # <a>Panimon Nimi</a>
+        r'<a[^>]*>([^<]+)</a>',
         re.DOTALL
     )
 
@@ -84,11 +76,9 @@ def extract_posts_from_html(html: str) -> list[dict]:
         aika = match.group(3).strip()
         panimo = match.group(4).strip()
 
-        # Puhdistetaan HTML-tagit tekstistä
         teksti = re.sub(r'<[^>]+>', '', teksti_raw)
         teksti = re.sub(r'\s+', ' ', teksti).strip()
 
-        # Suodatetaan pois liian lyhyet
         if len(teksti) < 20:
             continue
 
@@ -101,18 +91,15 @@ def extract_posts_from_html(html: str) -> list[dict]:
 
     print(f"Pattern löysi {len(posts)} postausta")
 
-    # Jos pattern ei toiminut, kokeillaan löyhempää versiota
     if not posts:
         print("Yritetään löyhempää patternilla...")
         pattern2 = re.compile(
             r'Julkaistu\s+<span[^>]*>([^<]+)</span>\s*sitten\s*@\s*<a[^>]*>([^<]+)</a>',
             re.DOTALL
         )
-        # Etsi Julkaistu-kohdat ja poimi teksti edeltä
         for match in pattern2.finditer(soma_html):
             aika = match.group(1).strip()
             panimo = match.group(2).strip()
-            # Etsi edeltävä teksti: viimeisin <a href="slug">...</a> ennen tätä
             before = soma_html[:match.start()]
             prev_a = re.search(
                 r'<a href="([a-z0-9-]+)"[^>]*>([\s\S]{20,500}?)</a>\s*</div>\s*<div[^>]*>\s*$',
@@ -129,7 +116,6 @@ def extract_posts_from_html(html: str) -> list[dict]:
                         "aika": aika,
                         "slug": slug
                     })
-
         print(f"Löyhempi pattern löysi {len(posts)} postausta")
 
     return posts
@@ -154,7 +140,6 @@ HYVÄKSY (uutuusolut):
 - Uuden oluen julkaisu nimellä, tyylillä ja/tai humalaluettelolla
 - Selkeä "uutuus"-ilmoitus nimettynä tuotteena
 - "Nyt saatavilla", "juuri tullut", "julkaisemme" + tuotenimi
-- Viikon olut tai tuoreolut jota kuvataan yksityiskohtaisesti
 
 HYLKÄÄ (ei uutuusolut):
 - Tapahtumat, konsertit, festivaalit, aukioloajat, lounasmainokset
@@ -188,7 +173,9 @@ POSTAUKSET:
         print(f"JSON-parsintavirhe: {e}\nClaude vastasi: {result_text}")
         return []
 
+
 SEEN_FILE = "seen_beers.json"
+
 
 def load_seen() -> set:
     """Lataa aiemmin postattujen oluiden lista."""
@@ -197,13 +184,15 @@ def load_seen() -> set:
             return set(json.load(f))
     return set()
 
+
 def save_seen(new_beers: set) -> None:
     """Lisää uudet oluet muistilistaan — ei koskaan poista vanhoja."""
     existing = load_seen()
-    merged = existing | new_beers  # yhdistelmä, ei kumpikaan häviä
+    merged = existing | new_beers
     with open(SEEN_FILE, "w") as f:
         json.dump(list(merged), f)
-        
+
+
 def send_to_discord(uutuudet: list[dict]) -> None:
     """Lähettää uutuusolut Discord-kanavalle."""
     if not uutuudet:
@@ -257,7 +246,6 @@ def main():
     uutuudet = analyze_with_claude(posts)
     print(f"Tunnistettiin {len(uutuudet)} uutuusolutta")
 
-    # Suodatetaan pois jo aiemmin postatut
     seen = load_seen()
     uudet = [u for u in uutuudet if f"{u['panimo']}:{u['olut']}" not in seen]
     print(f"Uusia (ei aiemmin postattuja): {len(uudet)}")
@@ -266,10 +254,10 @@ def main():
 
     send_to_discord(uudet)
 
-    # Tallennetaan postatut muistiin
-   if uudet:
+    if uudet:
         new_beers = {f"{u['panimo']}:{u['olut']}" for u in uudet}
         save_seen(new_beers)
+
     print("Valmis!")
 
 
